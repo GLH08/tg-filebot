@@ -1,0 +1,28 @@
+# 使用 GHCR 预构建镜像
+# docker compose -f docker-compose.ghcr.yml up -d
+
+services:
+  tg-filebot:
+    image: ghcr.io/${GITHUB_REPOSITORY:-your-username/tg-filebot}:${IMAGE_TAG:-latest}
+    container_name: tg-filebot
+    volumes:
+      - ./downloads:/app/downloads
+      - ./bot_session.session:/app/bot_session.session
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: '1G'
+        reservations:
+          cpus: '0.25'
+          memory: '256M'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
