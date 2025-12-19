@@ -3,7 +3,7 @@
 
 services:
   tg-filebot:
-    image: ghcr.io/${GITHUB_REPOSITORY:-your-username/tg-filebot}:${IMAGE_TAG:-latest}
+    image: ghcr.io/glh08/tg-filebot:${IMAGE_TAG:-latest}
     container_name: tg-filebot
     volumes:
       - ./downloads:/app/downloads

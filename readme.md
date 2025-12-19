@@ -14,7 +14,43 @@ Telegram 文件下载管理机器人，支持从消息或链接下载文件，�
 
 ## 快速开始
 
-### 使用 Docker（推荐）
+### 方式一：Docker Compose 部署（推荐）
+
+1. 创建部署目录并下载配置文件：
+
+```bash
+mkdir tg-filebot && cd tg-filebot
+
+# 下载 docker-compose 文件
+curl -O https://raw.githubusercontent.com/GLH08/tg-filebot/main/docker-compose.ghcr.yml
+
+# 下载环境变量模板
+curl -O https://raw.githubusercontent.com/GLH08/tg-filebot/main/.env.example
+mv .env.example .env
+```
+
+2. 编辑 `.env` 文件配置：
+
+```bash
+BOT_TOKEN=your_bot_token
+API_ID=your_api_id
+API_HASH=your_api_hash
+ALLOWED_USERS=123456789
+```
+
+3. 启动服务：
+
+```bash
+docker compose -f docker-compose.ghcr.yml up -d
+```
+
+4. 查看日志：
+
+```bash
+docker compose -f docker-compose.ghcr.yml logs -f
+```
+
+### 方式二：Docker Run
 
 ```bash
 # 创建配置文件
@@ -25,21 +61,35 @@ API_HASH=your_api_hash
 ALLOWED_USERS=123456789
 EOF
 
-# 使用预构建镜像
+# 运行容器
 docker run -d --name tg-filebot \
   --env-file .env \
   -v ./downloads:/app/downloads \
-  ghcr.io/<username>/tg-filebot:latest
+  --restart unless-stopped \
+  ghcr.io/glh08/tg-filebot:latest
 ```
 
-### 从源码构建
+### 方式三：从源码构建
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/GLH08/tg-filebot.git
 cd tg-filebot
 cp .env.example .env
 # 编辑 .env 配置
 docker compose up -d
+```
+
+## 更新升级
+
+```bash
+# Docker Compose 方式
+docker compose -f docker-compose.ghcr.yml pull
+docker compose -f docker-compose.ghcr.yml up -d
+
+# Docker Run 方式
+docker pull ghcr.io/glh08/tg-filebot:latest
+docker stop tg-filebot && docker rm tg-filebot
+# 重新运行 docker run 命令
 ```
 
 ## 命令列表
@@ -64,26 +114,19 @@ docker compose up -d
 | `BOT_TOKEN` | ✅ | - | Bot Token |
 | `API_ID` | ✅ | - | API ID |
 | `API_HASH` | ✅ | - | API Hash |
-| `ALLOWED_USERS` | ✅ | - | 允许的用户 ID |
+| `ALLOWED_USERS` | ✅ | - | 允许的用户 ID（逗号分隔） |
 | `MAX_CONCURRENT_DOWNLOADS` | | 5 | 最大并发数 |
-| `AUTO_CLEANUP_DAYS` | | 0 | 自动清理天数 |
+| `AUTO_CLEANUP_DAYS` | | 0 | 自动清理天数（0=禁用） |
 | `ALLOW_GROUP_MESSAGES` | | false | 允许群组使用 |
 
-## 项目结构
+## 镜像标签
 
-```
-tg-filebot/
-├── bot.py              # 入口
-├── config.py           # 配置
-├── handlers/           # 处理器
-│   ├── auth.py
-│   ├── command_handler.py
-│   └── message_handler.py
-└── utils/              # 工具
-    ├── helpers.py
-    ├── download_manager.py
-    └── file_manager.py
-```
+| 标签 | 说明 |
+|------|------|
+| `latest` | 最新稳定版 |
+| `main` | main 分支最新构建 |
+| `x.y.z` | 指定版本号 |
+| `xxxxxxx` | 指定提交哈希 |
 
 ## License
 
