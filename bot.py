@@ -42,8 +42,10 @@ class TelegramFileBot:
             Config.validate()
             
             # Initialize the Telethon client
+            session_path = os.path.join('data', 'bot_session')
+            os.makedirs('data', exist_ok=True)
             self.client = TelegramClient(
-                'bot_session',
+                session_path,
                 Config.API_ID,
                 Config.API_HASH
             )

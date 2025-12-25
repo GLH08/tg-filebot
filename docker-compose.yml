@@ -4,7 +4,7 @@ services:
     container_name: tg-filebot
     volumes:
       - ./downloads:/app/downloads
-      - ./bot_session.session:/app/bot_session.session
+      - ./data:/app/data
     restart: unless-stopped
     env_file:
       - .env
