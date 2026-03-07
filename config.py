@@ -40,7 +40,7 @@ class Config:
     AUTO_CLEANUP_DAYS: int = 0
     
     # Retry Settings
-    MAX_RETRIES: int = 3
+    MAX_RETRIES: int = 5
     
     _validated: bool = False
     

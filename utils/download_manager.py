@@ -173,6 +173,17 @@ class DownloadManager:
         download_id: str
     ) -> Optional[str]:
         """Start the actual download process."""
+        # 刷新消息对象，获取最新的 file_reference，防止长时间闲置后过期
+        try:
+            refreshed = await client.get_messages(message.chat_id, ids=message.id)
+            if refreshed and refreshed.media:
+                message = refreshed
+                logger.debug(f"已刷新消息 file_reference: {filename}")
+            else:
+                logger.warning(f"消息刷新后无媒体内容，使用原始消息: {filename}")
+        except Exception as e:
+            logger.warning(f"消息刷新失败，使用原始消息: {e}")
+
         today = datetime.now().strftime('%Y%m%d')
         download_path = os.path.join(config.DOWNLOAD_PATH, today)
         os.makedirs(download_path, exist_ok=True)
@@ -260,7 +271,7 @@ class DownloadManager:
         file_path: str,
         download_id: str
     ) -> Optional[str]:
-        """Download with retry logic for rate limits.
+        """下载文件，包含重试逻辑、连接恢复和 File Reference 刷新。
         
         Args:
             client: Telethon client
@@ -273,6 +284,25 @@ class DownloadManager:
         """
         for attempt in range(self.max_retries):
             try:
+                # 非首次重试时，强制断线重连以刷新 DC 连接
+                if attempt > 0:
+                    logger.info(f"重试前强制重连 DC (attempt {attempt + 1}/{self.max_retries})")
+                    try:
+                        await client.disconnect()
+                        await client.connect()
+                        logger.info("DC 重连成功")
+                    except Exception as reconn_err:
+                        logger.warning(f"DC 重连异常: {reconn_err}")
+                    
+                    # 重连后刷新消息对象获取最新 file_reference
+                    try:
+                        refreshed = await client.get_messages(message.chat_id, ids=message.id)
+                        if refreshed and refreshed.media:
+                            message = refreshed
+                            logger.debug("重试前已刷新消息 file_reference")
+                    except Exception as ref_err:
+                        logger.warning(f"重试前刷新消息失败: {ref_err}")
+
                 download_task = asyncio.create_task(
                     client.download_media(
                         message,
@@ -286,9 +316,24 @@ class DownloadManager:
                 
                 result = await download_task
                 
-                if result and os.path.exists(result):
-                    return result
-                raise Exception("Download failed - file not saved")
+                # 增强诊断：download_media 返回 None
+                if result is None:
+                    peer_id = getattr(message, 'peer_id', None)
+                    chat_info = getattr(peer_id, 'channel_id', getattr(peer_id, 'chat_id', 'unknown')) if peer_id else 'unknown'
+                    logger.warning(
+                        f"download_media 返回 None | "
+                        f"media 类型: {type(message.media).__name__} | "
+                        f"chat: {chat_info} | "
+                        f"fwd_from: {message.fwd_from is not None} | "
+                        f"noforwards: {getattr(message, 'noforwards', 'N/A')} | "
+                        f"attempt: {attempt + 1}/{self.max_retries}"
+                    )
+                    raise Exception("下载失败 - download_media 返回 None")
+                
+                if not os.path.exists(result):
+                    raise Exception(f"下载失败 - 文件未保存到: {result}")
+                
+                return result
                 
             except FloodWaitError as e:
                 wait_time = e.seconds
@@ -314,8 +359,10 @@ class DownloadManager:
             except Exception as e:
                 if attempt == self.max_retries - 1:
                     raise
-                logger.warning(f"Download attempt {attempt + 1} failed: {e}")
-                await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                # 加大退避时间：5s, 10s, 20s, 30s
+                wait_time = min(5 * (2 ** attempt), 30)
+                logger.warning(f"下载尝试 {attempt + 1} 失败: {e}，{wait_time}s 后重试...")
+                await asyncio.sleep(wait_time)
         
         return None
     
