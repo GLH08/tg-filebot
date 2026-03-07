@@ -153,9 +153,9 @@ class WebDashboard:
             active_list.append({
                 'job_id': job_id,
                 'filename': context.filename,
-                'downloaded': context.downloaded_bytes,
-                'total_size': context.total_size,
-                'speed': context.current_speed,
+                'downloaded': context.downloaded,
+                'total_size': context.size,
+                'speed': context.speed,
                 'status': 'downloading'
             })
             
