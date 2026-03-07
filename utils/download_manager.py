@@ -314,7 +314,14 @@ class DownloadManager:
                 if download_id in self.active_downloads:
                     self.active_downloads[download_id].task = download_task
                 
-                result = await download_task
+                try:
+                    # 加入超时控制，防止无限卡死
+                    result = await asyncio.wait_for(download_task, timeout=config.DOWNLOAD_TIMEOUT)
+                except asyncio.TimeoutError:
+                    if not download_task.done():
+                        download_task.cancel()
+                    logger.error(f"下载超时: 耗时超过 {config.DOWNLOAD_TIMEOUT} 秒")
+                    raise Exception(f"下载失败 - 超时 (超过 {config.DOWNLOAD_TIMEOUT} 秒)")
                 
                 # 增强诊断：download_media 返回 None
                 if result is None:

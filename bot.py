@@ -7,10 +7,12 @@ import asyncio
 from typing import Optional
 
 from telethon import TelegramClient
+from telethon.sessions import StringSession
 
 from config import Config, ConfigError
 from utils.download_manager import DownloadManager
 from utils.file_manager import FileManager
+from utils.web import WebDashboard
 from handlers.command_handler import register_command_handlers
 from handlers.message_handler import register_message_handlers
 
@@ -29,6 +31,7 @@ class TelegramFileBot:
         self.client: Optional[TelegramClient] = None
         self.download_manager: Optional[DownloadManager] = None
         self.file_manager: Optional[FileManager] = None
+        self.web_dashboard: Optional[WebDashboard] = None
         self._cleanup_task: Optional[asyncio.Task] = None
         self._keepalive_task: Optional[asyncio.Task] = None
     
@@ -43,10 +46,17 @@ class TelegramFileBot:
             Config.validate()
             
             # Initialize the Telethon client
-            session_path = os.path.join('data', 'bot_session')
-            os.makedirs('data', exist_ok=True)
+            if Config.SESSION_STRING:
+                session = StringSession(Config.SESSION_STRING)
+                logger.info("Configured to use USER mode (via StringSession)")
+            else:
+                session_path = os.path.join('data', 'bot_session')
+                os.makedirs('data', exist_ok=True)
+                session = session_path
+                logger.info("Configured to use BOT mode (via bot_token)")
+
             self.client = TelegramClient(
-                session_path,
+                session,
                 Config.API_ID,
                 Config.API_HASH
             )
@@ -78,8 +88,13 @@ class TelegramFileBot:
             return
         
         try:
-            # Start the client
-            await self.client.start(bot_token=Config.BOT_TOKEN)
+            # Start the client based on mode
+            if Config.SESSION_STRING:
+                await self.client.start()
+                logger.info("Connected as User Account.")
+            else:
+                await self.client.start(bot_token=Config.BOT_TOKEN)
+                logger.info("Connected as Bot Account.")
             
             # Register handlers
             register_command_handlers(
@@ -95,6 +110,10 @@ class TelegramFileBot:
             
             # 启动连接保活任务，防止长时间闲置导致 DC 连接陈旧
             self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+            
+            # Start the web dashboard (Default port 8080)
+            self.web_dashboard = WebDashboard(self.download_manager, port=int(os.getenv('WEB_PORT', 8080)))
+            await self.web_dashboard.start()
             
             logger.info("Bot started successfully and is now listening for messages")
             
@@ -128,6 +147,10 @@ class TelegramFileBot:
                 await self._keepalive_task
             except asyncio.CancelledError:
                 pass
+                
+        # Stop web dashboard
+        if self.web_dashboard:
+            await self.web_dashboard.stop()
         
         # Disconnect client
         if self.client and self.client.is_connected():

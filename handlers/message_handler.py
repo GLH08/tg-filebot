@@ -1,8 +1,9 @@
 """Message handlers for processing files and links."""
 
 import logging
+import re
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 from telethon import events
 from telethon.tl.types import (
@@ -40,6 +41,14 @@ def register_message_handlers(bot, download_manager: DownloadManager) -> None:
             logger.warning(f"Ignored message from unauthorized user: {event.sender_id}")
             return
 
+        # Enhanced logging for forwarded messages
+        if event.message.fwd_from:
+            fwd_source = event.message.fwd_from.from_id or event.message.fwd_from.channel_id
+            logger.info(f"收到转发消息: fwd_from={fwd_source}, type={type(fwd_source)}")
+            if not event.media:
+                logger.warning(f"转发消息无媒体内容: text_preview='{event.raw_text[:20]}'")
+                await event.respond("⚠️ 该转发消息似乎没有携带媒体文件。这可能是 Telegram 的版权保护限制，或者转发时未包含附件。")
+
         # Check for media content first
         if event.media:
             await _download_from_message(bot, event, download_manager)
@@ -47,21 +56,27 @@ def register_message_handlers(bot, download_manager: DownloadManager) -> None:
 
         # Check for Telegram links
         message_text = event.text
-        if message_text and _is_telegram_link(message_text):
-            await _process_link(bot, event, download_manager, message_text)
-            return
+        if message_text:
+            links = _extract_telegram_links(message_text)
+            if links:
+                await _process_links(bot, event, download_manager, links)
+                return
 
 
-def _is_telegram_link(text: str) -> bool:
-    """Check if text contains a Telegram link.
+def _extract_telegram_links(text: str) -> List[str]:
+    """Extract all Telegram links from text.
     
     Args:
-        text: Message text to check
+        text: Message text to parse
         
     Returns:
-        True if contains Telegram link
+        List of found Telegram links
     """
-    return "t.me/" in text or "telegram.me/" in text
+    if not text:
+        return []
+    # 正则匹配基本的 https://t.me/... 链接，并过滤末尾可能粘连的中文句号或括号等非URL字符
+    pattern = r'https?://(?:t\.me|telegram\.me)/[a-zA-Z0-9_/%+-]+'
+    return re.findall(pattern, text)
 
 
 async def _download_from_message(
@@ -100,35 +115,59 @@ async def _download_from_message(
         )
 
 
-async def _process_link(
+async def _process_links(
     bot,
     event: Message,
     download_manager: DownloadManager,
-    link: str
+    links: List[str]
 ) -> None:
-    """Process a Telegram link for download.
+    """Process one or multiple Telegram links for download.
     
     Args:
         bot: Telethon client
         event: Message event
         download_manager: DownloadManager instance
-        link: Telegram link to process
+        links: List of Telegram links to process
     """
     try:
-        status_message = await event.respond("⏳ Processing Telegram link...")
+        plural_suffix = "s" if len(links) > 1 else ""
+        status_message = await event.respond(f"⏳ Processing {len(links)} Telegram link{plural_suffix}...")
     except Exception as e:
         logger.error(f"Failed to create status message: {e}")
         return
     
-    try:
-        await download_manager.process_telegram_link(
-            bot, link, event.chat_id, status_message.id
-        )
-    except Exception as e:
-        logger.error(f"Link processing error for user {event.sender_id}: {e}", exc_info=True)
+    success_count = 0
+    fail_count = 0
+    
+    for i, link in enumerate(links):
+        try:
+            # Update status message for multiple links (if > 1)
+            if len(links) > 1:
+                await _safe_edit_message(
+                    bot, event.chat_id, status_message.id,
+                    f"⏳ Processing link {i+1}/{len(links)}...\n{link}"
+                )
+            await download_manager.process_telegram_link(
+                bot, link, event.chat_id, status_message.id
+            )
+            success_count += 1
+        except Exception as e:
+            logger.error(f"Link processing error for user {event.sender_id} on {link}: {e}", exc_info=True)
+            fail_count += 1
+            await _safe_edit_message(
+                bot, event.chat_id, status_message.id,
+                f"❌ Error processing link ({i+1}): {e}\n{link}"
+            )
+            # Give user 2 seconds to see the error for the current link
+            import asyncio
+            await asyncio.sleep(2)
+            
+    if len(links) > 1:
         await _safe_edit_message(
             bot, event.chat_id, status_message.id,
-            f"❌ Error processing link: {e}"
+            f"✅ Batch processing complete!\n"
+            f"Successfully added: {success_count}\n"
+            f"Failed: {fail_count}"
         )
 
 

@@ -19,8 +19,9 @@ class ConfigError(Exception):
 class Config:
     """Application configuration container."""
     
-    # Bot Credentials
+    # Bot/User Credentials
     BOT_TOKEN: str = ""
+    SESSION_STRING: str = ""
     API_ID: int = 0
     API_HASH: str = ""
     
@@ -41,6 +42,7 @@ class Config:
     
     # Retry Settings
     MAX_RETRIES: int = 5
+    DOWNLOAD_TIMEOUT: int = 7200  # Default 2 hours
     
     _validated: bool = False
     
@@ -48,6 +50,7 @@ class Config:
     def load(cls) -> None:
         """Load configuration from environment variables."""
         cls.BOT_TOKEN = os.getenv('BOT_TOKEN', '')
+        cls.SESSION_STRING = os.getenv('SESSION_STRING', '')
         cls.API_HASH = os.getenv('API_HASH', '')
         
         # Parse API_ID
@@ -83,7 +86,8 @@ class Config:
         cls.AUTO_CLEANUP_DAYS = cls._parse_int('AUTO_CLEANUP_DAYS', 0)
         
         # Retry Settings
-        cls.MAX_RETRIES = cls._parse_int('MAX_RETRIES', 3)
+        cls.MAX_RETRIES = cls._parse_int('MAX_RETRIES', 5)
+        cls.DOWNLOAD_TIMEOUT = cls._parse_int('DOWNLOAD_TIMEOUT', 7200)
     
     @classmethod
     def _parse_int(cls, env_var: str, default: int) -> int:
@@ -120,15 +124,16 @@ class Config:
         
         missing_vars = []
         
-        if not cls.BOT_TOKEN:
-            missing_vars.append("BOT_TOKEN")
+        missing_credentials = []
+        if not cls.BOT_TOKEN and not cls.SESSION_STRING:
+            missing_credentials.append("BOT_TOKEN or SESSION_STRING")
         if not cls.API_ID:
-            missing_vars.append("API_ID")
+            missing_credentials.append("API_ID")
         if not cls.API_HASH:
-            missing_vars.append("API_HASH")
+            missing_credentials.append("API_HASH")
         
-        if missing_vars:
-            raise ConfigError(f"Missing essential environment variables: {', '.join(missing_vars)}")
+        if missing_credentials:
+            raise ConfigError(f"Missing essential environment variables: {', '.join(missing_credentials)}")
         
         if not cls.ALLOWED_USERS:
             logger.warning(
@@ -172,6 +177,7 @@ def _get_max_concurrent_downloads() -> int:
 Config.load()
 
 BOT_TOKEN = Config.BOT_TOKEN
+SESSION_STRING = Config.SESSION_STRING
 API_ID = Config.API_ID
 API_HASH = Config.API_HASH
 ALLOWED_USERS = Config.ALLOWED_USERS
@@ -182,3 +188,4 @@ UPDATE_INTERVAL = Config.UPDATE_INTERVAL
 ALLOW_GROUP_MESSAGES = Config.ALLOW_GROUP_MESSAGES
 AUTO_CLEANUP_DAYS = Config.AUTO_CLEANUP_DAYS
 MAX_RETRIES = Config.MAX_RETRIES
+DOWNLOAD_TIMEOUT = Config.DOWNLOAD_TIMEOUT
