@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from collections import deque
 
 from telethon import TelegramClient
-from telethon.tl.types import Message
+from telethon.tl.types import Message, MessageMediaDocument
 from telethon.errors import FloodWaitError
 
 import config
@@ -185,6 +185,19 @@ class DownloadManager:
         except Exception as e:
             logger.warning(f"消息刷新失败，使用原始消息: {e}")
 
+        # 验证媒体类型：仅支持 MessageMediaDocument（实际文件），拒绝 WebPage 等不可下载类型
+        if not isinstance(message.media, MessageMediaDocument):
+            media_type = type(message.media).__name__
+            logger.warning(f"不支持的媒体类型 {media_type}，跳过下载: {filename}")
+            await self._safe_edit_message(
+                client, chat_id, status_msg_id,
+                f"⚠️ **无法下载**\n\n"
+                f"**文件:** `{filename}`\n"
+                f"**原因:** 媒体类型 `{media_type}` 不是可下载的文件。\n"
+                f"请确保发送的是实际文件链接，而非网页预览。"
+            )
+            return None
+
         today = datetime.now().strftime('%Y%m%d')
         download_path = os.path.join(config.DOWNLOAD_PATH, today)
         os.makedirs(download_path, exist_ok=True)
@@ -285,17 +298,9 @@ class DownloadManager:
         """
         for attempt in range(self.max_retries):
             try:
-                # 非首次重试时，强制断线重连以刷新 DC 连接
+                # 非首次重试时，仅刷新 file_reference（绝不断开共享连接！）
                 if attempt > 0:
-                    logger.info(f"重试前强制重连 DC (attempt {attempt + 1}/{self.max_retries})")
-                    try:
-                        await client.disconnect()
-                        await client.connect()
-                        logger.info("DC 重连成功")
-                    except Exception as reconn_err:
-                        logger.warning(f"DC 重连异常: {reconn_err}")
-                    
-                    # 重连后刷新消息对象获取最新 file_reference
+                    logger.info(f"重试前刷新 file_reference (attempt {attempt + 1}/{self.max_retries})")
                     try:
                         refreshed = await client.get_messages(message.chat_id, ids=message.id)
                         if refreshed and refreshed.media:
