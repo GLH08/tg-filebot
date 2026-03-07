@@ -1,19 +1,25 @@
+# ---- Builder Phase ----
+FROM python:3.11 AS builder
+
+WORKDIR /build
+
+# Provide required system dependencies that some python modules need to compile
+# python:3.11 non-slim inherently contains standard build-essential tools.
+COPY requirements.txt .
+RUN pip wheel --no-cache-dir --no-deps --wheel-dir /build/wheels -r requirements.txt
+
+# ---- Final Runner Phase ----
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install dependencies
+# Copy the pre-built, compiled binary wheels from builder phase
+COPY --from=builder /build/wheels /wheels
 COPY requirements.txt .
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        gcc \
-        g++ \
-        python3-dev \
-        libssl-dev \
-        libffi-dev \
-    && pip install --no-cache-dir -r requirements.txt \
-    && apt-get purge -y --auto-remove gcc g++ python3-dev \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+
+# Install dependencies using the wheels to avoid any C-compilation errors
+RUN pip install --no-cache /wheels/* \
+    && rm -rf /wheels
 
 # Copy application code
 COPY . .
