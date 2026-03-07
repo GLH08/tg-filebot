@@ -39,6 +39,7 @@ class DownloadInfo:
     task: Optional[asyncio.Task] = None
     initial_phase: bool = True
     rate_limited: bool = False
+    last_edit_time: float = field(default_factory=time.time)
     chat_id: int = 0
     status_msg_id: int = 0
     message: Optional[Message] = None
@@ -606,6 +607,10 @@ class DownloadManager:
             if total and total > 0:
                 info.size = total
             
+            # 当开始收到数据时，退出初始化阶段
+            if info.initial_phase and downloaded > 0:
+                info.initial_phase = False
+            
             current_time = time.time()
             elapsed = current_time - info.last_update_time
             if elapsed >= 0.1:
@@ -616,37 +621,43 @@ class DownloadManager:
                 info.last_downloaded = downloaded
     
     async def _update_progress(self, client: TelegramClient, download_id: str) -> None:
-        """Periodically update progress messages."""
+        """定期更新 Telegram 对话框中的进度消息。
+        
+        使用独立的 last_edit_time 追踪消息编辑时间，
+        避免与速度计算的 last_update_time 互相干扰。
+        FloodWait 恢复后采用动态退避策略，防止连环限流。
+        """
+        min_edit_interval = 5.0  # 编辑消息的最小时间间隔（秒）
         try:
             while download_id in self.active_downloads:
                 info = self.active_downloads[download_id]
-                
-                if info.rate_limited:
-                    await asyncio.sleep(10)
-                    info.rate_limited = False
-                    continue
                 
                 if info.status == 'downloading':
                     message = self._build_progress_message(info)
                     
                     if message != info.last_message:
                         current_time = time.time()
-                        # 单独限速：保证每个任务至少间隔 5 秒才发一次编辑内容请求以避免被集体 FloodWait
-                        if current_time - info.last_update_time >= 5.0 or info.initial_phase:
+                        time_since_last_edit = current_time - info.last_edit_time
+                        
+                        if time_since_last_edit >= min_edit_interval:
                             try:
                                 await client.edit_message(info.chat_id, info.status_msg_id, message)
                                 info.last_message = message
-                                info.last_update_time = current_time
+                                info.last_edit_time = current_time
+                                # 成功编辑后，逐步恢复正常间隔
+                                min_edit_interval = max(5.0, min_edit_interval * 0.7)
                             except FloodWaitError as e:
-                                logger.warning(f"FloodWaitError on progress update: Telegram mandates a {e.seconds}s pause.")
-                                info.rate_limited = True
+                                logger.warning(f"FloodWaitError on progress update: {e.seconds}s pause required.")
                                 await asyncio.sleep(e.seconds)
+                                # FloodWait 恢复后，加大间隔防止连环触发
+                                min_edit_interval = max(30.0, e.seconds * 0.3)
+                                logger.info(f"FloodWait recovered. Next edit interval set to {min_edit_interval:.0f}s.")
                                 continue
                             except Exception as e:
                                 if "not modified" not in str(e).lower():
-                                    pass
+                                    logger.debug(f"Edit message failed: {e}")
                 
-                # Dynamic sleep based on file size to reduce excessive API calls
+                # 根据文件大小动态调整轮询间隔
                 if info.initial_phase:
                     await asyncio.sleep(3)
                 elif info.size > 500 * 1024 * 1024:
@@ -739,16 +750,19 @@ class DownloadManager:
         msg_id: int,
         text: str
     ) -> bool:
-        """Safely edit a message, handling errors gracefully."""
-        try:
-            await client.edit_message(chat_id, msg_id, text)
-            return True
-        except FloodWaitError as e:
-            logger.warning(f"FloodWaitError in safe edit message! Pausing process for {e.seconds}s.")
-            await asyncio.sleep(e.seconds)
-            return False
-        except Exception as e:
-            error_str = str(e).lower()
-            if "not modified" not in error_str:
-                logger.warning(f"Failed to edit message: {e}")
-            return False
+        """安全地编辑消息，处理异常并在 FloodWait 后自动重试一次。"""
+        for attempt in range(2):  # 最多尝试 2 次（首次 + FloodWait 后重试 1 次）
+            try:
+                await client.edit_message(chat_id, msg_id, text)
+                return True
+            except FloodWaitError as e:
+                logger.warning(f"FloodWaitError in safe edit message! Pausing for {e.seconds}s (attempt {attempt + 1}/2).")
+                await asyncio.sleep(e.seconds + 2)  # 额外等 2 秒缓冲
+                if attempt == 1:
+                    return False
+            except Exception as e:
+                error_str = str(e).lower()
+                if "not modified" not in error_str:
+                    logger.warning(f"Failed to edit message: {e}")
+                return False
+        return False
