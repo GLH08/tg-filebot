@@ -30,7 +30,7 @@ class Config:
     
     # Bot Settings
     DOWNLOAD_PATH: str = "downloads"
-    MAX_CONCURRENT_DOWNLOADS: int = 5
+    MAX_CONCURRENT_DOWNLOADS: int = 3
     CACHE_TTL: int = 30
     UPDATE_INTERVAL: int = 1
     
@@ -75,7 +75,7 @@ class Config:
         
         # Bot Settings
         cls.DOWNLOAD_PATH = os.getenv('DOWNLOAD_PATH', 'downloads')
-        cls.MAX_CONCURRENT_DOWNLOADS = cls._parse_int('MAX_CONCURRENT_DOWNLOADS', 5)
+        cls.MAX_CONCURRENT_DOWNLOADS = cls._parse_int('MAX_CONCURRENT_DOWNLOADS', 3)
         cls.CACHE_TTL = cls._parse_int('CACHE_TTL', 30)
         cls.UPDATE_INTERVAL = cls._parse_int('UPDATE_INTERVAL', 1)
         

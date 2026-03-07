@@ -622,7 +622,8 @@ class DownloadManager:
                 info = self.active_downloads[download_id]
                 
                 if info.rate_limited:
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(10)
+                    info.rate_limited = False
                     continue
                 
                 if info.status == 'downloading':
@@ -630,26 +631,30 @@ class DownloadManager:
                     
                     if message != info.last_message:
                         current_time = time.time()
-                        if current_time - self.last_global_update >= self.global_update_interval:
-                            success = await self._safe_edit_message(
-                                client, info.chat_id, info.status_msg_id, message
-                            )
-                            if success:
+                        # 单独限速：保证每个任务至少间隔 5 秒才发一次编辑内容请求以避免被集体 FloodWait
+                        if current_time - info.last_update_time >= 5.0 or info.initial_phase:
+                            try:
+                                await client.edit_message(info.chat_id, info.status_msg_id, message)
                                 info.last_message = message
-                                self.last_global_update = current_time
-                            elif "flood" in str(success).lower() if success else False:
+                                info.last_update_time = current_time
+                            except FloodWaitError as e:
+                                logger.warning(f"FloodWaitError on progress update: Telegram mandates a {e.seconds}s pause.")
                                 info.rate_limited = True
-                                break
+                                await asyncio.sleep(e.seconds)
+                                continue
+                            except Exception as e:
+                                if "not modified" not in str(e).lower():
+                                    pass
                 
-                # Dynamic sleep based on file size
+                # Dynamic sleep based on file size to reduce excessive API calls
                 if info.initial_phase:
-                    await asyncio.sleep(1)
-                elif info.size > 500 * 1024 * 1024:
                     await asyncio.sleep(3)
+                elif info.size > 500 * 1024 * 1024:
+                    await asyncio.sleep(10)
                 elif info.size > 100 * 1024 * 1024:
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(7)
                 else:
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(5)
                     
         except asyncio.CancelledError:
             pass
@@ -738,6 +743,10 @@ class DownloadManager:
         try:
             await client.edit_message(chat_id, msg_id, text)
             return True
+        except FloodWaitError as e:
+            logger.warning(f"FloodWaitError in safe edit message! Pausing process for {e.seconds}s.")
+            await asyncio.sleep(e.seconds)
+            return False
         except Exception as e:
             error_str = str(e).lower()
             if "not modified" not in error_str:
