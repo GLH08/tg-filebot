@@ -70,6 +70,9 @@ class DownloadManager:
         self.global_update_interval = 1
         self._queue_processor_task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
+
+        # 启动时扫描残留的 .downloading 文件
+        self._scan_residual_downloading_files()
     
     async def _get_unique_filepath(self, directory: str, filename: str) -> str:
         """Generate a unique filename to avoid overwriting existing files.
@@ -100,7 +103,25 @@ class DownloadManager:
             if counter > 1000:  # Safety limit
                 new_filename = f"{name}_{uuid.uuid4().hex[:8]}{ext}"
                 return os.path.join(directory, new_filename)
-    
+
+    def _scan_residual_downloading_files(self) -> None:
+        """扫描残留的 .downloading 文件并记录警告日志."""
+        base_dir = config.DOWNLOAD_PATH
+        if not os.path.exists(base_dir):
+            return
+
+        for root, _, filenames in os.walk(base_dir):
+            for fn in filenames:
+                if fn.endswith('.downloading'):
+                    # 尝试从文件名中提取 download_id
+                    parts = fn.rsplit('.', 2)  # 拆成 filename.id.downloading
+                    download_id = parts[-2] if len(parts) >= 3 else 'unknown'
+                    full_path = os.path.join(root, fn)
+                    logger.warning(
+                        f"发现未完成的下载残留文件: {full_path} "
+                        f"(download_id: {download_id})。如需清理请使用 /cleanup 命令。"
+                    )
+
     def _get_active_count(self) -> int:
         """Get count of actively downloading items."""
         return sum(1 for d in self.active_downloads.values() 
@@ -201,28 +222,29 @@ class DownloadManager:
         today = datetime.now().strftime('%Y%m%d')
         download_path = os.path.join(config.DOWNLOAD_PATH, today)
         os.makedirs(download_path, exist_ok=True)
-        
-        file_path = await self._get_unique_filepath(download_path, filename)
+
+        # 生成下载中文件名：{原文件名}.{download_id}.downloading
+        temp_filename = f"{filename}.{download_id}.downloading"
+        file_path = os.path.join(download_path, temp_filename)
         relative_path = os.path.relpath(file_path, config.DOWNLOAD_PATH)
-        actual_filename = os.path.basename(file_path)
-        
+
         key = download_id
         download_info = DownloadInfo(
             download_id=download_id,
-            filename=actual_filename,
-            path=file_path,
+            filename=filename,          # 存纯净名（无后缀），用于展示
+            path=file_path,             # 含 .downloading 后缀的完整路径
             relative_path=relative_path,
             status='downloading',
             chat_id=chat_id,
             status_msg_id=status_msg_id,
             message=message
         )
-        
+
         self.active_downloads[key] = download_info
-        
+
         await self._safe_edit_message(
             client, chat_id, status_msg_id,
-            f"⏬ Downloading: `{actual_filename}`\n"
+            f"⏬ Downloading: `{filename}`\n"
             f"🔄 Initializing download...\n"
             f"🔢 Download ID: `{download_id}`"
         )
@@ -240,23 +262,39 @@ class DownloadManager:
                 info = self.active_downloads[key]
                 if info.status != 'cancelled':
                     file_size = os.path.getsize(result) if os.path.exists(result) else 0
+
+                    # 去掉 .downloading 后缀，调用 _get_unique_filepath() 生成最终文件名
+                    base_name = filename
+                    final_path = await self._get_unique_filepath(download_path, base_name)
+                    final_filename = os.path.basename(final_path)
+                    final_relative = os.path.relpath(final_path, config.DOWNLOAD_PATH)
+
+                    # 如果临时路径和最终路径不同，执行重命名
+                    if file_path != final_path:
+                        os.rename(file_path, final_path)
+                        logger.info(f"Renamed: {os.path.basename(file_path)} -> {final_filename}")
+
+                    # 更新 DownloadInfo
+                    info.filename = final_filename
+                    info.path = final_path
+                    info.relative_path = final_relative
                     info.status = 'completed'
                     info.size = file_size
                     info.downloaded = file_size
-                    
+
                     await self._send_completion_message(
-                        client, chat_id, status_msg_id, relative_path, file_size
+                        client, chat_id, status_msg_id, final_relative, file_size
                     )
-                    
-                    logger.info(f"Download completed: {actual_filename}, ID: {download_id}")
+
+                    logger.info(f"Download completed: {final_filename}, ID: {download_id}")
             
             return download_id
             
         except asyncio.CancelledError:
-            logger.info(f"Download cancelled: {actual_filename}, ID: {download_id}")
+            logger.info(f"Download cancelled: {filename}, ID: {download_id}")
             await self._safe_edit_message(
                 client, chat_id, status_msg_id,
-                f"🛑 Download cancelled: `{actual_filename}`"
+                f"🛑 Download cancelled: `{filename}`"
             )
             self._cleanup_partial_file(file_path)
             return None
