@@ -6,6 +6,7 @@ import time
 import logging
 import uuid
 import re
+import shutil
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
@@ -17,7 +18,7 @@ from telethon.errors import FloodWaitError
 from telethon.tl.functions.messages import GetDiscussionMessageRequest
 
 import config
-from .helpers import format_size, format_time
+from .helpers import format_size, format_time, sanitize_filename
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +66,8 @@ class DownloadManager:
         self.active_downloads: Dict[str, DownloadInfo] = {}
         self.download_queue: deque[QueuedDownload] = deque()
         self.update_interval = 3
-        self.max_concurrent_downloads = config.MAX_CONCURRENT_DOWNLOADS
-        self.max_retries = config.MAX_RETRIES
+        self.max_concurrent_downloads = max(1, config.MAX_CONCURRENT_DOWNLOADS)
+        self.max_retries = max(1, config.MAX_RETRIES)
         self.last_global_update: float = 0
         self.global_update_interval = 1
         self._queue_processor_task: Optional[asyncio.Task] = None
@@ -77,6 +78,8 @@ class DownloadManager:
         self.fallback_client: Optional[TelegramClient] = None
         # 「用老号重试」登记表：token -> {link, chat_id, status_msg_id, ts}
         self.retry_registry: Dict[str, Dict[str, Any]] = {}
+        # 可选：文件管理器引用，下载完成后失效其列表缓存（由 bot 注入）
+        self.file_manager = None
 
         # 启动时扫描残留的 .downloading 文件
         self._scan_residual_downloading_files()
@@ -202,29 +205,8 @@ class DownloadManager:
         download_id: str
     ) -> Optional[str]:
         """Start the actual download process."""
-        # 刷新消息对象，获取最新的 file_reference，防止长时间闲置后过期
-        try:
-            refreshed = await client.get_messages(message.chat_id, ids=message.id)
-            if refreshed and refreshed.media:
-                message = refreshed
-                logger.debug(f"已刷新消息 file_reference: {filename}")
-            else:
-                logger.warning(f"消息刷新后无媒体内容，使用原始消息: {filename}")
-        except Exception as e:
-            logger.warning(f"消息刷新失败，使用原始消息: {e}")
-
-        # 验证媒体类型：仅支持 MessageMediaDocument（实际文件），拒绝 WebPage 等不可下载类型
-        if not isinstance(message.media, MessageMediaDocument):
-            media_type = type(message.media).__name__
-            logger.warning(f"不支持的媒体类型 {media_type}，跳过下载: {filename}")
-            await self._safe_edit_message(
-                client, chat_id, status_msg_id,
-                f"⚠️ **无法下载**\n\n"
-                f"**文件:** `{filename}`\n"
-                f"**原因:** 媒体类型 `{media_type}` 不是可下载的文件。\n"
-                f"请确保发送的是实际文件链接，而非网页预览。"
-            )
-            return None
+        # 净化文件名，防止路径穿越（Telegram 文件名可能含 ../ 或绝对路径）
+        filename = sanitize_filename(filename)
 
         today = datetime.now().strftime('%Y%m%d')
         download_path = os.path.join(config.DOWNLOAD_PATH, today)
@@ -246,8 +228,35 @@ class DownloadManager:
             status_msg_id=status_msg_id,
             message=message
         )
-
+        # 立即登记占位：使 _get_active_count() 即时计入本任务，闭合
+        # 「检查并发数 → 登记」之间的竞态（到这里为止无 await）
         self.active_downloads[key] = download_info
+
+        # 刷新消息对象，获取最新的 file_reference，防止长时间闲置后过期
+        try:
+            refreshed = await client.get_messages(message.chat_id, ids=message.id)
+            if refreshed and refreshed.media:
+                message = refreshed
+                download_info.message = message
+                logger.debug(f"已刷新消息 file_reference: {filename}")
+            else:
+                logger.warning(f"消息刷新后无媒体内容，使用原始消息: {filename}")
+        except Exception as e:
+            logger.warning(f"消息刷新失败，使用原始消息: {e}")
+
+        # 验证媒体类型：仅支持 MessageMediaDocument（实际文件），拒绝 WebPage 等不可下载类型
+        if not isinstance(message.media, MessageMediaDocument):
+            media_type = type(message.media).__name__
+            logger.warning(f"不支持的媒体类型 {media_type}，跳过下载: {filename}")
+            del self.active_downloads[key]
+            await self._safe_edit_message(
+                client, chat_id, status_msg_id,
+                f"⚠️ **无法下载**\n\n"
+                f"**文件:** `{filename}`\n"
+                f"**原因:** 媒体类型 `{media_type}` 不是可下载的文件。\n"
+                f"请确保发送的是实际文件链接，而非网页预览。"
+            )
+            return None
 
         await self._safe_edit_message(
             client, chat_id, status_msg_id,
@@ -278,7 +287,7 @@ class DownloadManager:
 
                     # 如果临时路径和最终路径不同，执行重命名
                     if file_path != final_path:
-                        os.rename(file_path, final_path)
+                        shutil.move(file_path, final_path)
                         logger.info(f"Renamed: {os.path.basename(file_path)} -> {final_filename}")
 
                     # 更新 DownloadInfo
@@ -294,6 +303,10 @@ class DownloadManager:
                     )
 
                     logger.info(f"Download completed: {final_filename}, ID: {download_id}")
+
+                    # 新文件落盘后失效文件列表缓存，使 /list 立刻可见
+                    if self.file_manager is not None:
+                        self.file_manager._invalidate_cache()
             
             return download_id
             
@@ -310,6 +323,7 @@ class DownloadManager:
             logger.error(f"Download error: {e}", exc_info=True)
             if key in self.active_downloads:
                 self.active_downloads[key].status = 'failed'
+            self._cleanup_partial_file(file_path)
             await self._safe_edit_message(
                 client, chat_id, status_msg_id,
                 f"❌ Download failed: {str(e)}"
@@ -723,8 +737,6 @@ class DownloadManager:
         # Determine if update is significant
         if info.downloaded < 1024 * 1024:  # First 1MB
             significant = True
-            if downloaded > 0 and info.initial_phase:
-                info.initial_phase = False
         else:
             min_progress = min(256 * 1024, (total or 1) * 0.01)
             significant = abs(downloaded - info.last_downloaded) >= min_progress

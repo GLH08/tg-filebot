@@ -110,9 +110,10 @@ class TelegramFileBot:
                 await self.user_client.start()
                 logger.info("Connected as User Account (老号).")
 
-            # 把「消息客户端」(主) 与「回退下载客户端」(老号) 交给下载管理器
+            # 把「消息客户端」(主)、「回退下载客户端」(老号)、文件管理器交给下载管理器
             self.download_manager.messaging_client = self.main_client
             self.download_manager.fallback_client = self.fallback_client
+            self.download_manager.file_manager = self.file_manager
 
             # 处理器只注册在主客户端上；老号是静默后台，不接收指令
             register_command_handlers(

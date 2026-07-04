@@ -90,8 +90,8 @@ class FileManager:
             for filename in filenames:
                 full_path = os.path.join(root, filename)
                 
-                # Skip partial downloads or non-files
-                if not os.path.isfile(full_path) or filename.endswith('.partial'):
+                # Skip partial/in-progress downloads or non-files
+                if not os.path.isfile(full_path) or filename.endswith(('.partial', '.downloading')):
                     continue
                 
                 relative_path = os.path.relpath(full_path, self.base_dir)

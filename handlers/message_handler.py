@@ -43,7 +43,8 @@ def register_message_handlers(bot, download_manager: DownloadManager) -> None:
 
         # Enhanced logging for forwarded messages
         if event.message.fwd_from:
-            fwd_source = event.message.fwd_from.from_id or event.message.fwd_from.channel_id
+            fwd = event.message.fwd_from
+            fwd_source = getattr(fwd, 'from_id', None) or getattr(fwd, 'from_name', None)
             logger.info(f"收到转发消息: fwd_from={fwd_source}, type={type(fwd_source)}")
             if not event.media:
                 logger.warning(f"转发消息无媒体内容: text_preview='{event.raw_text[:20]}'")
