@@ -112,7 +112,11 @@ class TelegramFileBot:
             self._keepalive_task = asyncio.create_task(self._keepalive_loop())
             
             # Start the web dashboard (Default port 8080)
-            self.web_dashboard = WebDashboard(self.download_manager, port=int(os.getenv('WEB_PORT', 8080)))
+            self.web_dashboard = WebDashboard(
+                self.download_manager,
+                port=int(os.getenv('WEB_PORT', 8080)),
+                password=os.getenv('WEB_PASSWORD', '')
+            )
             await self.web_dashboard.start()
             
             logger.info("Bot started successfully and is now listening for messages")

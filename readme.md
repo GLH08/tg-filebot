@@ -115,9 +115,11 @@ docker stop tg-filebot && docker rm tg-filebot
 | `API_ID` | ✅ | - | API ID |
 | `API_HASH` | ✅ | - | API Hash |
 | `ALLOWED_USERS` | ✅ | - | 允许的用户 ID（逗号分隔） |
-| `MAX_CONCURRENT_DOWNLOADS` | | 5 | 最大并发数 |
+| `MAX_CONCURRENT_DOWNLOADS` | | 3 | 最大并发数 |
 | `AUTO_CLEANUP_DAYS` | | 0 | 自动清理天数（0=禁用） |
 | `ALLOW_GROUP_MESSAGES` | | false | 允许群组使用 |
+| `WEB_PORT` | | 8080 | Web 面板端口 |
+| `WEB_PASSWORD` | | - | Web 面板访问密码（HTTP Basic Auth）；留空则无鉴权 |
 
 ## 镜像标签
 

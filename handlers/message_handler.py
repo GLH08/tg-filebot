@@ -129,42 +129,38 @@ async def _process_links(
         download_manager: DownloadManager instance
         links: List of Telegram links to process
     """
-    try:
-        plural_suffix = "s" if len(links) > 1 else ""
-        status_message = await event.respond(f"⏳ Processing {len(links)} Telegram link{plural_suffix}...")
-    except Exception as e:
-        logger.error(f"Failed to create status message: {e}")
-        return
-    
+    multi = len(links) > 1
     success_count = 0
     fail_count = 0
-    
+
     for i, link in enumerate(links):
+        # 每个链接单独创建状态消息，避免并发下载时进度互相覆盖
         try:
-            # Update status message for multiple links (if > 1)
-            if len(links) > 1:
-                await _safe_edit_message(
-                    bot, event.chat_id, status_message.id,
-                    f"⏳ Processing link {i+1}/{len(links)}...\n{link}"
-                )
-            await download_manager.process_telegram_link(
+            label = f" {i + 1}/{len(links)}" if multi else ""
+            status_message = await event.respond(f"⏳ Processing link{label}...\n{link}")
+        except Exception as e:
+            logger.error(f"Failed to create status message: {e}")
+            fail_count += 1
+            continue
+
+        try:
+            download_id = await download_manager.process_telegram_link(
                 bot, link, event.chat_id, status_message.id
             )
-            success_count += 1
+            if download_id:
+                success_count += 1
+            else:
+                fail_count += 1
         except Exception as e:
             logger.error(f"Link processing error for user {event.sender_id} on {link}: {e}", exc_info=True)
             fail_count += 1
             await _safe_edit_message(
                 bot, event.chat_id, status_message.id,
-                f"❌ Error processing link ({i+1}): {e}\n{link}"
+                f"❌ Error processing link ({i + 1}): {e}\n{link}"
             )
-            # Give user 2 seconds to see the error for the current link
-            import asyncio
-            await asyncio.sleep(2)
-            
-    if len(links) > 1:
-        await _safe_edit_message(
-            bot, event.chat_id, status_message.id,
+
+    if multi:
+        await event.respond(
             f"✅ Batch processing complete!\n"
             f"Successfully added: {success_count}\n"
             f"Failed: {fail_count}"

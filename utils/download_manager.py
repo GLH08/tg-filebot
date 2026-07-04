@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from collections import deque
 
 from telethon import TelegramClient
-from telethon.tl.types import Message, MessageMediaDocument
+from telethon.tl.types import Message, MessageMediaDocument, PeerChannel
 from telethon.errors import FloodWaitError
 
 import config
@@ -583,19 +583,24 @@ class DownloadManager:
         Returns:
             Download ID if successful
         """
-        match = re.search(r't\.me/(?:c/)?([a-zA-Z0-9_]+)/(\d+)', link)
+        match = re.search(r't\.me/(c/)?([a-zA-Z0-9_]+)/(\d+)', link)
         if not match:
             await self._safe_edit_message(
                 client, chat_id, status_msg_id,
                 "❌ Invalid Telegram link format"
             )
             return None
-        
-        channel, message_id = match.groups()
+
+        is_private, channel, message_id = match.groups()
         message_id = int(message_id)
-        
+
         try:
-            entity = await client.get_entity(channel)
+            # 私有频道链接 (t.me/c/<id>/<msg>)：数字 ID 需构造 PeerChannel，不能当用户名解析
+            # 注意：仅 User 模式且账号是该频道成员时可访问（Bot 模式无法访问私有频道）
+            if is_private:
+                entity = PeerChannel(int(channel))
+            else:
+                entity = await client.get_entity(channel)
             message = await client.get_messages(entity, ids=message_id)
             
             if not message or not message.media:
