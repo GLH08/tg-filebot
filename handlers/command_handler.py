@@ -1,6 +1,7 @@
 """Command handlers for the Telegram File Bot."""
 
 import logging
+import asyncio
 from typing import Callable, Awaitable, Any, List
 
 from telethon import events, Button
@@ -303,6 +304,23 @@ Files are stored in a `YYYYMMDD` dated folder structure.
         
         await list_command(event)
         await event.answer()
+
+    # 「用老号重试」回调处理器
+    @bot.on(events.CallbackQuery(pattern=b"userretry_(.+)"))
+    async def user_retry_callback_handler(event) -> None:
+        """处理「🔁 用老号重试」按钮：用老号（回退客户端）重下登记的链接。"""
+        if not is_user_allowed(event.sender_id):
+            await event.answer("⛔ You are not authorized to use this bot.")
+            return
+
+        token = event.pattern_match.group(1).decode('utf-8')
+        if token not in download_manager.retry_registry:
+            await event.answer("⏱️ 该重试已过期或已处理，请重新发送链接。", alert=True)
+            return
+
+        await event.answer("🔁 正在用老号重试...")
+        # 下载可能耗时，放到后台任务，避免阻塞回调
+        asyncio.create_task(download_manager.retry_download_via_fallback(token))
 
 
 def _build_pagination_buttons(page: int, total_pages: int) -> List[List[Button]]:

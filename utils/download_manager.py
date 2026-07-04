@@ -72,6 +72,12 @@ class DownloadManager:
         self._queue_processor_task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
 
+        # 双客户端：messaging_client 恒为主客户端(发/改消息)，fallback_client 为老号(回退下载)
+        self.messaging_client: Optional[TelegramClient] = None
+        self.fallback_client: Optional[TelegramClient] = None
+        # 「用老号重试」登记表：token -> {link, chat_id, status_msg_id, ts}
+        self.retry_registry: Dict[str, Dict[str, Any]] = {}
+
         # 启动时扫描残留的 .downloading 文件
         self._scan_residual_downloading_files()
     
@@ -496,6 +502,45 @@ class DownloadManager:
             'message': f"No download found with ID: {download_id}"
         }
     
+    def register_retry(self, link: str, chat_id: int, status_msg_id: int) -> str:
+        """登记一次「用老号重试」，返回短 token 供按钮回调取回。顺带清理过期条目。"""
+        now = time.time()
+        # 清理 1 小时前的陈旧登记
+        for t in [t for t, v in self.retry_registry.items() if now - v.get('ts', 0) > 3600]:
+            del self.retry_registry[t]
+
+        token = uuid.uuid4().hex[:8]
+        self.retry_registry[token] = {
+            'link': link,
+            'chat_id': chat_id,
+            'status_msg_id': status_msg_id,
+            'ts': now,
+        }
+        return token
+
+    async def retry_download_via_fallback(self, token: str) -> bool:
+        """按 token 用回退客户端（老号）重下登记的链接。token 不存在返回 False。"""
+        entry = self.retry_registry.pop(token, None)
+        if entry is None:
+            return False
+
+        if self.fallback_client is None:
+            await self._safe_edit_message(
+                self.messaging_client, entry['chat_id'], entry['status_msg_id'],
+                "❌ 未配置老号（SESSION_STRING），无法用用户账号重试。"
+            )
+            return True
+
+        await self._safe_edit_message(
+            self.messaging_client, entry['chat_id'], entry['status_msg_id'],
+            "🔁 正在用老号重试下载..."
+        )
+        # 老号作为下载客户端；进度/消息仍经 messaging_client（@bot）发送
+        await self.process_telegram_link(
+            self.fallback_client, entry['link'], entry['chat_id'], entry['status_msg_id']
+        )
+        return True
+
     def list_active_downloads(self) -> Dict[str, Dict[str, Any]]:
         """List all active downloads.
         
@@ -713,6 +758,7 @@ class DownloadManager:
         FloodWait 恢复后采用动态退避策略，防止连环限流。
         """
         min_edit_interval = 5.0  # 编辑消息的最小时间间隔（秒）
+        client = self.messaging_client or client  # 进度消息始终经主客户端发送
         try:
             while download_id in self.active_downloads:
                 info = self.active_downloads[download_id]
@@ -835,7 +881,8 @@ class DownloadManager:
         msg_id: int,
         text: str
     ) -> bool:
-        """安全地编辑消息，处理异常并在 FloodWait 后自动重试一次。"""
+        """安全地编辑消息（优先用消息客户端/主客户端），处理异常并在 FloodWait 后自动重试一次。"""
+        client = self.messaging_client or client
         for attempt in range(2):  # 最多尝试 2 次（首次 + FloodWait 后重试 1 次）
             try:
                 await client.edit_message(chat_id, msg_id, text)

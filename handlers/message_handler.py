@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 from typing import Optional, List
 
-from telethon import events
+from telethon import events, Button
 from telethon.tl.types import (
     DocumentAttributeFilename,
     MessageMediaPhoto,
@@ -152,6 +152,18 @@ async def _process_links(
                 success_count += 1
             else:
                 fail_count += 1
+                # 双客户端模式：@bot 下载失败 → 提供「用老号重试」按钮
+                if download_manager.fallback_client is not None:
+                    token = download_manager.register_retry(link, event.chat_id, status_message.id)
+                    try:
+                        await bot.edit_message(
+                            event.chat_id, status_message.id,
+                            f"❌ @bot 无法下载该链接（可能是禁止转发/私有频道）。\n{link}\n\n"
+                            f"👇 点下方用老号重试：",
+                            buttons=[Button.inline("🔁 用老号重试", f"userretry_{token}".encode())]
+                        )
+                    except Exception as e:
+                        logger.warning(f"挂重试按钮失败: {e}")
         except Exception as e:
             logger.error(f"Link processing error for user {event.sender_id} on {link}: {e}", exc_info=True)
             fail_count += 1

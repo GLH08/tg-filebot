@@ -28,7 +28,10 @@ class TelegramFileBot:
     """Main bot class that manages the Telegram client and handlers."""
     
     def __init__(self):
-        self.client: Optional[TelegramClient] = None
+        self.bot_client: Optional[TelegramClient] = None
+        self.user_client: Optional[TelegramClient] = None
+        self.main_client: Optional[TelegramClient] = None
+        self.fallback_client: Optional[TelegramClient] = None
         self.download_manager: Optional[DownloadManager] = None
         self.file_manager: Optional[FileManager] = None
         self.web_dashboard: Optional[WebDashboard] = None
@@ -45,21 +48,32 @@ class TelegramFileBot:
             # Validate configuration
             Config.validate()
             
-            # Initialize the Telethon client
-            if Config.SESSION_STRING:
-                session = StringSession(Config.SESSION_STRING)
-                logger.info("Configured to use USER mode (via StringSession)")
-            else:
-                session_path = os.path.join('data', 'bot_session')
+            # 按凭据创建客户端：BOT_TOKEN → bot_client，SESSION_STRING → user_client（老号）
+            if Config.BOT_TOKEN:
                 os.makedirs('data', exist_ok=True)
-                session = session_path
-                logger.info("Configured to use BOT mode (via bot_token)")
+                self.bot_client = TelegramClient(
+                    os.path.join('data', 'bot_session'),
+                    Config.API_ID,
+                    Config.API_HASH
+                )
+            if Config.SESSION_STRING:
+                self.user_client = TelegramClient(
+                    StringSession(Config.SESSION_STRING),
+                    Config.API_ID,
+                    Config.API_HASH
+                )
 
-            self.client = TelegramClient(
-                session,
-                Config.API_ID,
-                Config.API_HASH
-            )
+            # 主客户端（收命令、发/改进度消息）：优先 bot，否则老号
+            self.main_client = self.bot_client or self.user_client
+            # 回退下载客户端：仅当两者都配置（双客户端模式）时才有独立老号
+            self.fallback_client = self.user_client if (self.bot_client and self.user_client) else None
+
+            if self.bot_client and self.user_client:
+                logger.info("Configured: DUAL mode (bot UI + user-account fallback downloader)")
+            elif self.user_client:
+                logger.info("Configured: USER mode (single user account)")
+            else:
+                logger.info("Configured: BOT mode (single bot account)")
             
             # Initialize managers
             self.download_manager = DownloadManager()
@@ -83,26 +97,30 @@ class TelegramFileBot:
     
     async def start(self) -> None:
         """Start the bot and begin listening for messages."""
-        if not self.client:
+        if not self.main_client:
             logger.error("Bot not initialized. Call initialize() first.")
             return
-        
+
         try:
-            # Start the client based on mode
-            if Config.SESSION_STRING:
-                await self.client.start()
-                logger.info("Connected as User Account.")
-            else:
-                await self.client.start(bot_token=Config.BOT_TOKEN)
+            # 启动各客户端
+            if self.bot_client:
+                await self.bot_client.start(bot_token=Config.BOT_TOKEN)
                 logger.info("Connected as Bot Account.")
-            
-            # Register handlers
+            if self.user_client:
+                await self.user_client.start()
+                logger.info("Connected as User Account (老号).")
+
+            # 把「消息客户端」(主) 与「回退下载客户端」(老号) 交给下载管理器
+            self.download_manager.messaging_client = self.main_client
+            self.download_manager.fallback_client = self.fallback_client
+
+            # 处理器只注册在主客户端上；老号是静默后台，不接收指令
             register_command_handlers(
-                self.client,
+                self.main_client,
                 self.file_manager,
                 self.download_manager
             )
-            register_message_handlers(self.client, self.download_manager)
+            register_message_handlers(self.main_client, self.download_manager)
             
             # Start auto-cleanup task if configured
             if Config.AUTO_CLEANUP_DAYS > 0:
@@ -121,15 +139,15 @@ class TelegramFileBot:
             
             logger.info("Bot started successfully and is now listening for messages")
             
-            # Run until disconnected
-            await self.client.run_until_disconnected()
-            
+            # Run until the main client disconnects
+            await self.main_client.run_until_disconnected()
+
         except Exception as e:
             logger.critical(f"Bot runtime error: {e}", exc_info=True)
             raise
         finally:
             # Only stop if not already stopped
-            if self.client and self.client.is_connected():
+            if self.main_client and self.main_client.is_connected():
                 await self.stop()
     
     async def stop(self) -> None:
@@ -156,10 +174,11 @@ class TelegramFileBot:
         if self.web_dashboard:
             await self.web_dashboard.stop()
         
-        # Disconnect client
-        if self.client and self.client.is_connected():
-            await self.client.disconnect()
-        
+        # Disconnect all clients
+        for client in (self.bot_client, self.user_client):
+            if client and client.is_connected():
+                await client.disconnect()
+
         logger.info("Bot stopped")
     
     async def _auto_cleanup_loop(self) -> None:
@@ -184,26 +203,32 @@ class TelegramFileBot:
                 await asyncio.sleep(60 * 60)  # Wait an hour on error
     
     async def _keepalive_loop(self) -> None:
-        """每 30 分钟发送轻量级请求，保持 DC 连接活跃，防止长时间闲置后连接陈旧。"""
+        """每 30 分钟对每个客户端发送轻量级请求，保持 DC 连接活跃，防止长时间闲置后连接陈旧。"""
         while True:
             try:
                 await asyncio.sleep(30 * 60)  # 30 分钟
-                if self.client and self.client.is_connected():
-                    me = await self.client.get_me()
-                    logger.debug(f"连接保活: OK (bot id: {me.id})")
-                else:
-                    logger.warning("连接保活: 连接已断开，尝试重连...")
-                    await self.client.connect()
+                for name, client in (('bot', self.bot_client), ('user', self.user_client)):
+                    if not client:
+                        continue
+                    try:
+                        if client.is_connected():
+                            me = await client.get_me()
+                            logger.debug(f"连接保活[{name}]: OK (id: {me.id})")
+                        else:
+                            logger.warning(f"连接保活[{name}]: 连接已断开，尝试重连...")
+                            await client.connect()
+                    except Exception as e:
+                        logger.warning(f"连接保活[{name}]失败: {e}，尝试重连...")
+                        try:
+                            await client.disconnect()
+                            await client.connect()
+                            logger.info(f"连接保活[{name}]: 重连成功")
+                        except Exception as reconn_err:
+                            logger.error(f"连接保活[{name}]: 重连失败: {reconn_err}")
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.warning(f"连接保活失败: {e}，尝试重连...")
-                try:
-                    await self.client.disconnect()
-                    await self.client.connect()
-                    logger.info("连接保活: 重连成功")
-                except Exception as reconn_err:
-                    logger.error(f"连接保活: 重连失败: {reconn_err}")
+                logger.error(f"连接保活循环异常: {e}")
 
 
 def main() -> int:
