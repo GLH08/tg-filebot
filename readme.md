@@ -121,6 +121,29 @@ docker stop tg-filebot && docker rm tg-filebot
 | `WEB_PORT` | | 8080 | Web 面板端口 |
 | `WEB_PASSWORD` | | - | Web 面板访问密码（HTTP Basic Auth）；留空则无鉴权 |
 
+## 用户模式（下载受保护 / 评论区文件）
+
+默认 **Bot 模式**无法下载开启了「限制保存内容」的频道文件，也无法访问私有频道。改用 **User 模式**（以真实账号登录）可解决，代价是需自行承担 Telegram ToS/版权方面的风险，且滥用可能导致账号被限制。
+
+1. 安装 telethon 后生成 SESSION_STRING：
+
+   ```bash
+   pip install telethon
+   python gen_session.py
+   ```
+
+   按提示输入 API_ID / API_HASH / 手机号（含国家码）/ 验证码（如有两步验证再输密码），末尾会打印一串 SESSION_STRING。
+
+2. 填入 `.env`（**务必保密，等同账号凭据**），并将 BOT_TOKEN 留空：
+
+   ```bash
+   SESSION_STRING=1Bxxxxxxxx...
+   ```
+
+3. 登录的账号必须能看到目标频道（私有频道需已加入）。
+
+> 评论区链接（`t.me/频道/帖子?comment=编号`）指向的是关联讨论群里的文件，已支持解析；同样需要 User 模式且账号能访问该讨论群。
+
 ## 镜像标签
 
 | 标签 | 说明 |

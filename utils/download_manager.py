@@ -14,6 +14,7 @@ from collections import deque
 from telethon import TelegramClient
 from telethon.tl.types import Message, MessageMediaDocument, PeerChannel
 from telethon.errors import FloodWaitError
+from telethon.tl.functions.messages import GetDiscussionMessageRequest
 
 import config
 from .helpers import format_size, format_time
@@ -583,7 +584,7 @@ class DownloadManager:
         Returns:
             Download ID if successful
         """
-        match = re.search(r't\.me/(c/)?([a-zA-Z0-9_]+)/(\d+)', link)
+        match = re.search(r't\.me/(c/)?([a-zA-Z0-9_]+)/(\d+)(?:\?comment=(\d+))?', link)
         if not match:
             await self._safe_edit_message(
                 client, chat_id, status_msg_id,
@@ -591,8 +592,9 @@ class DownloadManager:
             )
             return None
 
-        is_private, channel, message_id = match.groups()
+        is_private, channel, message_id, comment_id = match.groups()
         message_id = int(message_id)
+        comment_id = int(comment_id) if comment_id else None
 
         try:
             # 私有频道链接 (t.me/c/<id>/<msg>)：数字 ID 需构造 PeerChannel，不能当用户名解析
@@ -601,7 +603,19 @@ class DownloadManager:
                 entity = PeerChannel(int(channel))
             else:
                 entity = await client.get_entity(channel)
-            message = await client.get_messages(entity, ids=message_id)
+
+            if comment_id is not None:
+                # 评论链接 (?comment=N)：目标文件在频道关联讨论群的第 N 条消息，
+                # 需先由频道帖子解析出讨论群，再取该评论消息（同样需 User 模式且有权访问）
+                message = await self._get_comment_message(client, entity, message_id, comment_id)
+                if message is None:
+                    await self._safe_edit_message(
+                        client, chat_id, status_msg_id,
+                        "❌ 无法定位评论内容（该帖可能未开启评论，或账号无权访问讨论群）"
+                    )
+                    return None
+            else:
+                message = await client.get_messages(entity, ids=message_id)
             
             if not message or not message.media:
                 await self._safe_edit_message(
@@ -629,6 +643,29 @@ class DownloadManager:
             )
             return None
     
+    async def _get_comment_message(
+        self,
+        client: TelegramClient,
+        channel_entity,
+        post_id: int,
+        comment_id: int
+    ) -> Optional[Message]:
+        """解析频道帖子的关联讨论群，返回该评论 (comment_id) 对应的消息对象。
+
+        通过 GetDiscussionMessageRequest 由「频道 + 帖子号」定位讨论群，
+        再按 comment_id 取讨论群里的具体评论消息。失败返回 None。
+        """
+        try:
+            disc = await client(GetDiscussionMessageRequest(peer=channel_entity, msg_id=post_id))
+            if not disc.messages:
+                logger.warning(f"讨论群解析为空 (post={post_id})")
+                return None
+            group_peer = disc.messages[0].peer_id
+            return await client.get_messages(group_peer, ids=comment_id)
+        except Exception as e:
+            logger.warning(f"解析评论消息失败 (post={post_id}, comment={comment_id}): {e}")
+            return None
+
     def _progress_callback(self, downloaded: int, total: int, download_id: str) -> None:
         """Callback to track download progress."""
         if download_id not in self.active_downloads:

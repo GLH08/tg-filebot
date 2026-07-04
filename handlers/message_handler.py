@@ -75,7 +75,8 @@ def _extract_telegram_links(text: str) -> List[str]:
     if not text:
         return []
     # 正则匹配基本的 https://t.me/... 链接，并过滤末尾可能粘连的中文句号或括号等非URL字符
-    pattern = r'https?://(?:t\.me|telegram\.me)/[a-zA-Z0-9_/%+-]+'
+    # 末尾可选捕获 ?comment=/?thread= 等查询串（评论/话题链接），否则会被截断丢失
+    pattern = r'https?://(?:t\.me|telegram\.me)/[a-zA-Z0-9_/%+-]+(?:\?[a-zA-Z0-9_=&]+)?'
     return re.findall(pattern, text)
 
 
