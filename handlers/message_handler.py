@@ -9,6 +9,7 @@ from telethon import events, Button
 from telethon.tl.types import (
     DocumentAttributeFilename,
     MessageMediaPhoto,
+    MessageMediaWebPage,
     Message
 )
 
@@ -50,8 +51,11 @@ def register_message_handlers(bot, download_manager: DownloadManager) -> None:
                 logger.warning(f"转发消息无媒体内容: text_preview='{event.raw_text[:20]}'")
                 await event.respond("⚠️ 该转发消息似乎没有携带媒体文件。这可能是 Telegram 的版权保护限制，或者转发时未包含附件。")
 
-        # Check for media content first
-        if event.media:
+        # Check for media content first.
+        # MessageMediaWebPage is a link preview attached to this message itself
+        # (e.g. when the user sends a t.me link as text) - it is not a file, so
+        # skip it and let the text-link branch below parse the actual link.
+        if event.media and not isinstance(event.media, MessageMediaWebPage):
             await _download_from_message(bot, event, download_manager)
             return
 

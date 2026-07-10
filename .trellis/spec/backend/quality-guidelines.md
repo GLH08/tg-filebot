@@ -38,6 +38,7 @@
 - **Throttle message edits** — progress edits wait ≥5s between edits and back off dynamically after `FloodWaitError` (`download_manager.py:772,791,796`). Never edit in a tight loop.
 - **Always use `_safe_edit_message`** for status updates so `FloodWaitError` / "not modified" don't crash the handler (`download_manager.py:889`).
 - **Stop propagation** at the end of every command handler (`command_handler.py:49`).
+- **`MessageMediaWebPage` is a link preview, not a file** - when a user sends a t.me link as text, Telegram attaches this preview to the sender's own message. In `message_handler`, skip it in the media check so the message reaches link parsing (`message_handler.py:58`); otherwise it hits the `MessageMediaDocument`-only check in `_start_download` and fails with "媒体类型 MessageMediaWebPage 不是可下载的文件".
 
 ---
 

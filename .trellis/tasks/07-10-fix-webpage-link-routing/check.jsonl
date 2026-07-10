@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "verify the fix preserves media-first routing for real documents/photos and only skips MessageMediaWebPage"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "review checklist for media-type handling and regression safety"}

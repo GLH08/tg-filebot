@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "documents the MessageMediaDocument media-type check in _start_download and the message-handler routing the fix touches"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "confirms message_handler.py owns the media-vs-link routing being fixed"}
