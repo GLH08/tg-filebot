@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "verify photo acceptance doesn't regress document download or weaken the WebPage rejection"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "confirm cleanup/rename paths still hold for photos"}

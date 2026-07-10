@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from collections import deque
 
 from telethon import TelegramClient
-from telethon.tl.types import Message, MessageMediaDocument, PeerChannel
+from telethon.tl.types import Message, MessageMediaDocument, MessageMediaPhoto, PeerChannel
 from telethon.errors import FloodWaitError
 from telethon.tl.functions.messages import GetDiscussionMessageRequest
 
@@ -244,8 +244,9 @@ class DownloadManager:
         except Exception as e:
             logger.warning(f"消息刷新失败，使用原始消息: {e}")
 
-        # 验证媒体类型：仅支持 MessageMediaDocument（实际文件），拒绝 WebPage 等不可下载类型
-        if not isinstance(message.media, MessageMediaDocument):
+        # 验证媒体类型：支持 MessageMediaDocument（文件/视频）与 MessageMediaPhoto（照片），
+        # 拒绝 WebPage 等不可下载类型
+        if not isinstance(message.media, (MessageMediaDocument, MessageMediaPhoto)):
             media_type = type(message.media).__name__
             logger.warning(f"不支持的媒体类型 {media_type}，跳过下载: {filename}")
             del self.active_downloads[key]
@@ -684,7 +685,9 @@ class DownloadManager:
                 return None
             
             filename = f"file_from_link_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-            if hasattr(message.media, 'document'):
+            if isinstance(message.media, MessageMediaPhoto):
+                filename = f"photo_{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg"
+            elif hasattr(message.media, 'document'):
                 for attr in message.media.document.attributes:
                     if hasattr(attr, 'file_name') and attr.file_name:
                         filename = attr.file_name

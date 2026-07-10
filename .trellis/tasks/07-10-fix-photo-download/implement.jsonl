@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "documents the _start_download media-type check being relaxed and the cleanup/rename patterns around it"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Telegram-specific media-type rules and review checklist for regression safety"}
